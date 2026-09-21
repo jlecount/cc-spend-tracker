@@ -2,3 +2,5 @@ spend.json
 __pycache__
 report.html
 run.log
+run_hourly.log
+report_hourly.html
