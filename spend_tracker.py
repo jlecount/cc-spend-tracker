@@ -8,6 +8,7 @@ macOS notification. Costs are ccusage estimates (token counts x list prices).
 """
 import html
 import json
+import os
 import subprocess
 import sys
 from datetime import date, datetime, timedelta
@@ -17,6 +18,13 @@ HERE = Path(__file__).resolve().parent
 STATE_PATH = HERE / "spend.json"
 REPORT_PATH = HERE / "report.html"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+# Anthropic's prompt-cache TTL: a gap this long since the session's last request
+# evicts the cache (a "cache miss"). Not exposed in Claude Code's settings files
+# (checked ~/.claude/settings.json and ~/.claude.json) — it's an API-level cache_control
+# parameter (5m default, 1h with a beta header) the harness picks per session, so there's
+# nothing to look up. Override with CLAUDE_CACHE_TTL_SECONDS if your sessions run the 1h tier.
+CACHE_TTL_SECONDS = int(os.environ.get("CLAUDE_CACHE_TTL_SECONDS", 300))
 
 
 def empty_state():
@@ -42,9 +50,28 @@ def merge(state, daily_rows, session_rows):
         day["sessions"][session_id] = day["sessions"].get(session_id, 0.0) + delta
 
 
+def activity_stats(timestamps, ttl_seconds=CACHE_TTL_SECONDS):
+    """Splits the gaps between a session's request timestamps into active time (gap < TTL)
+    and idle time (gap >= TTL); a gap >= TTL also busts the prompt cache, so it's a miss."""
+    ordered = sorted(parse_timestamp(t) for t in timestamps)
+    active_seconds = idle_seconds = 0.0
+    cache_misses = 0
+    for prev, cur in zip(ordered, ordered[1:]):
+        gap = (cur - prev).total_seconds()
+        if gap >= ttl_seconds:
+            idle_seconds += gap
+            cache_misses += 1
+        else:
+            active_seconds += gap
+    return {
+        "active_seconds": active_seconds, "idle_seconds": idle_seconds,
+        "gap_count": max(len(ordered) - 1, 0), "cache_misses": cache_misses,
+    }
+
+
 def read_session_info(log_path):
     """Title Claude Code recorded for the session (last ai-title), else the first typed prompt."""
-    title, first_prompt, project, started, ended = None, None, None, None, None
+    title, first_prompt, project, timestamps = None, None, None, []
     for line in Path(log_path).read_text().splitlines():
         try:
             entry = json.loads(line)
@@ -52,8 +79,7 @@ def read_session_info(log_path):
             continue
         timestamp = entry.get("timestamp")
         if isinstance(timestamp, str):
-            started = min(started or timestamp, timestamp)
-            ended = max(ended or timestamp, timestamp)
+            timestamps.append(timestamp)
         if entry.get("type") == "ai-title":
             title = entry["aiTitle"]
         elif entry.get("type") == "user":
@@ -61,7 +87,13 @@ def read_session_info(log_path):
             content = entry.get("message", {}).get("content")
             if first_prompt is None and isinstance(content, str):
                 first_prompt = content.strip().replace("\n", " ")[:80]
-    return {"title": title or first_prompt or "", "project": project or "", "started": started, "ended": ended}
+    timestamps.sort()
+    return {
+        "title": title or first_prompt or "", "project": project or "",
+        "started": timestamps[0] if timestamps else None,
+        "ended": timestamps[-1] if timestamps else None,
+        **activity_stats(timestamps),
+    }
 
 
 def parse_timestamp(value):
@@ -114,11 +146,16 @@ def run_ccusage(subcommand, since):
 def session_row(session_id, cost, biggest, info):
     start_text, end_text, minutes = describe_span(info)
     per_minute = f"${cost / minutes:.3f}" if minutes >= 1 else "-"
+    gap_count = info.get("gap_count", 0)
+    miss_pct = f"{info.get('cache_misses', 0) / gap_count * 100:.0f}%" if gap_count else "-"
     return (
         f'<div class="session"><div class="what"><span class="title">{html.escape(info.get("title") or "(no title)")}</span>'
         f'<code>{html.escape(info.get("project", ""))} &middot; {html.escape(session_id)}</code></div>'
         f'<span class="bar"><i style="width:{cost / biggest * 100:.1f}%"></i></span>'
         f'<span class="duration">{format_duration(minutes * 60) if minutes else ""}</span>'
+        f'<span class="active">{format_duration(info.get("active_seconds", 0.0))}</span>'
+        f'<span class="idle">{format_duration(info.get("idle_seconds", 0.0))}</span>'
+        f'<span class="miss">{miss_pct}</span>'
         f'<span class="cost">${cost:.2f}</span>'
         f'<span class="start">{start_text}</span><span class="end">{end_text}</span>'
         f'<span class="per-minute">{per_minute}</span></div>'
@@ -154,7 +191,8 @@ def render_report(state, start, end):
             info = state.get("session_info", {})
             biggest = sessions[0][1] or 0.01
             header = (
-                '<div class="session head"><span>Session</span><span></span><span>Duration</span><span>Cost</span>'
+                '<div class="session head"><span>Session</span><span></span><span>Duration</span>'
+                "<span>Active</span><span>Idle</span><span>Miss %</span><span>Cost</span>"
                 "<span>Start</span><span>End</span><span>Cost/min</span></div>"
             )
             items = header + "".join(session_row(sid, cost, biggest, info.get(sid, {})) for sid, cost in sessions)
@@ -174,13 +212,14 @@ td, th {{ text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--lin
 .detail td {{ padding: 0; border-bottom: 1px solid var(--line); }}
 .panel {{ margin: 6px 8px 12px; padding: 8px 12px; max-height: 320px; overflow-y: auto;
   border: 1px solid var(--line); border-radius: 8px; background: #8881; box-shadow: 0 4px 12px #0002; }}
-.session {{ display: grid; grid-template-columns: minmax(0, 1fr) 90px 4.5em 4.5em 8em 8em 5.5em; gap: 12px; align-items: center; padding: 3px 0; }}
+.session {{ display: grid; grid-template-columns: minmax(0, 1fr) 90px 63px 63px 63px 56px 63px 112px 112px 77px; gap: 12px; align-items: center; padding: 3px 0; }}
 .session .what {{ display: flex; flex-direction: column; min-width: 0; }}
 .session .title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .session code {{ font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }}
 .session .bar {{ height: 8px; border-radius: 4px; background: var(--line); }}
 .session .bar i {{ display: block; height: 100%; border-radius: 4px; background: var(--accent); }}
-.session .start, .session .end, .session .per-minute, .session .duration {{ text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }}
+.session .start, .session .end, .session .per-minute, .session .duration,
+.session .active, .session .idle, .session .miss {{ text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }}
 .session.head {{ font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }}
 .session.head span:nth-child(n+3) {{ text-align: right; }}
 .session .duration {{ text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }}

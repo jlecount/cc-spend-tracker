@@ -58,10 +58,42 @@ class SessionInfoTest(unittest.TestCase):
         info = st.read_session_info(path)
         self.assertEqual((info["started"], info["ended"]), ("2026-09-16T14:00:00.000Z", "2026-09-16T16:45:30.000Z"))
 
+    def test_computes_activity_stats_from_all_timestamps(self):
+        path = self.write_log([
+            {"type": "user", "timestamp": "2026-09-16T14:00:00.000Z", "message": {"content": "hi"}},
+            {"type": "assistant", "timestamp": "2026-09-16T14:04:00.000Z"},
+            {"type": "assistant", "timestamp": "2026-09-16T14:10:00.000Z"},
+        ])
+        info = st.read_session_info(path)
+        self.assertAlmostEqual(info["active_seconds"], 4 * 60)
+        self.assertAlmostEqual(info["idle_seconds"], 6 * 60)
+        self.assertEqual(info["gap_count"], 2)
+        self.assertEqual(info["cache_misses"], 1)
+
     def test_format_duration(self):
         self.assertEqual(st.format_duration(30), "<1m")
         self.assertEqual(st.format_duration(12 * 60), "12m")
         self.assertEqual(st.format_duration(2 * 3600 + 45 * 60), "2h 45m")
+
+    def test_activity_stats_splits_gaps_at_the_cache_ttl(self):
+        # gaps: 4min (active), 6min (idle, >= 5min ttl), 1min (active)
+        timestamps = [
+            "2026-09-16T14:00:00.000Z",
+            "2026-09-16T14:04:00.000Z",
+            "2026-09-16T14:10:00.000Z",
+            "2026-09-16T14:11:00.000Z",
+        ]
+        stats = st.activity_stats(timestamps, ttl_seconds=300)
+        self.assertAlmostEqual(stats["active_seconds"], 5 * 60)
+        self.assertAlmostEqual(stats["idle_seconds"], 6 * 60)
+        self.assertEqual(stats["gap_count"], 3)
+        self.assertEqual(stats["cache_misses"], 1)
+
+    def test_activity_stats_handles_no_or_single_timestamp(self):
+        self.assertEqual(st.activity_stats([], ttl_seconds=300),
+                          {"active_seconds": 0.0, "idle_seconds": 0.0, "gap_count": 0, "cache_misses": 0})
+        self.assertEqual(st.activity_stats(["2026-09-16T14:00:00.000Z"], ttl_seconds=300),
+                          {"active_seconds": 0.0, "idle_seconds": 0.0, "gap_count": 0, "cache_misses": 0})
 
     def test_falls_back_to_first_typed_prompt(self):
         path = self.write_log([{"type": "user", "cwd": "/a/b", "message": {"content": "fix the thing " * 20}}])
@@ -75,6 +107,7 @@ class SessionInfoTest(unittest.TestCase):
             "session_info": {"abc": {
                 "title": "Fix <b>bug", "project": "proj",
                 "started": "2026-09-20T14:00:00.000Z", "ended": "2026-09-20T15:30:00.000Z",
+                "active_seconds": 20 * 60, "idle_seconds": 70 * 60, "gap_count": 4, "cache_misses": 1,
             }},
         }
         page = st.render_report(state, date(2026, 9, 20), date(2026, 9, 20))
@@ -85,6 +118,12 @@ class SessionInfoTest(unittest.TestCase):
         self.assertIn('<span class="per-minute">$0.011</span>', page)
         self.assertRegex(page, r'<span class="start">Sep 20 \d\d:\d\d</span>')
         self.assertRegex(page, r'<span class="end">Sep 20 \d\d:\d\d</span>')
+        self.assertIn("<span>Active</span>", page)
+        self.assertIn("<span>Idle</span>", page)
+        self.assertIn("<span>Miss %</span>", page)
+        self.assertIn('<span class="active">20m</span>', page)
+        self.assertIn('<span class="idle">1h 10m</span>', page)
+        self.assertIn('<span class="miss">25%</span>', page)
 
 
 class ReportRangeTest(unittest.TestCase):
