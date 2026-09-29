@@ -34,6 +34,15 @@ class RenderReportTest(unittest.TestCase):
             self.assertIn(sid, page)
 
 
+class ModelNameTest(unittest.TestCase):
+    def test_formats_model_ids(self):
+        self.assertEqual(st.format_model("claude-sonnet-5"), "Sonnet 5")
+        self.assertEqual(st.format_model("claude-sonnet-5-5"), "Sonnet 5.5")
+        self.assertEqual(st.format_model("claude-sonnet-4-5-20250929"), "Sonnet 4.5")
+        self.assertEqual(st.format_model("claude-haiku-4-5-20251001"), "Haiku 4.5")
+        self.assertEqual(st.format_model("sonnet"), "sonnet")
+
+
 class SessionInfoTest(unittest.TestCase):
     def write_log(self, entries):
         path = Path(tempfile.mkdtemp()) / "abc.jsonl"
@@ -142,3 +151,28 @@ class ReportRangeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionModelTest(unittest.TestCase):
+    def write_log(self, entries):
+        path = Path(tempfile.mkdtemp()) / "abc.jsonl"
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        return path
+
+    def test_records_models_most_used_first_and_skips_synthetic(self):
+        path = self.write_log([
+            {"type": "assistant", "message": {"model": "claude-opus-5"}},
+            {"type": "assistant", "message": {"model": "claude-sonnet-5"}},
+            {"type": "assistant", "message": {"model": "claude-sonnet-5"}},
+            {"type": "assistant", "message": {"model": "<synthetic>"}},
+        ])
+        self.assertEqual(st.read_session_info(path)["models"], ["claude-sonnet-5", "claude-opus-5"])
+
+    def test_session_row_shows_models_after_session_id(self):
+        info = {"title": "T", "project": "d1", "models": ["claude-sonnet-5", "claude-opus-5-5"]}
+        row = st.session_row("sid-1", 1.0, 1.0, info)
+        self.assertIn("d1 &middot; sid-1, Sonnet 5, Opus 5.5</code>", row)
+
+    def test_session_row_without_models_is_unchanged(self):
+        row = st.session_row("sid-1", 1.0, 1.0, {"project": "d1"})
+        self.assertIn("d1 &middot; sid-1</code>", row)

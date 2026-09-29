@@ -9,8 +9,10 @@ macOS notification. Costs are ccusage estimates (token counts x list prices).
 import html
 import json
 import os
+import re
 import subprocess
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -18,6 +20,8 @@ HERE = Path(__file__).resolve().parent
 STATE_PATH = HERE / "spend.json"
 REPORT_PATH = HERE / "report.html"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
+# Placeholder model name Claude Code writes on locally generated messages.
+SYNTHETIC_MODEL = "<synthetic>"
 
 # Anthropic's prompt-cache TTL: a gap this long since the session's last request
 # evicts the cache (a "cache miss"). Not exposed in Claude Code's settings files
@@ -72,6 +76,7 @@ def activity_stats(timestamps, ttl_seconds=CACHE_TTL_SECONDS):
 def read_session_info(log_path):
     """Title Claude Code recorded for the session (last ai-title), else the first typed prompt."""
     title, first_prompt, project, timestamps = None, None, None, []
+    model_counts = Counter()
     for line in Path(log_path).read_text().splitlines():
         try:
             entry = json.loads(line)
@@ -80,6 +85,10 @@ def read_session_info(log_path):
         timestamp = entry.get("timestamp")
         if isinstance(timestamp, str):
             timestamps.append(timestamp)
+        if entry.get("type") == "assistant":
+            model = entry.get("message", {}).get("model")
+            if model and model != SYNTHETIC_MODEL:
+                model_counts[model] += 1
         if entry.get("type") == "ai-title":
             title = entry["aiTitle"]
         elif entry.get("type") == "user":
@@ -90,10 +99,19 @@ def read_session_info(log_path):
     timestamps.sort()
     return {
         "title": title or first_prompt or "", "project": project or "",
+        "models": [model for model, _ in model_counts.most_common()],
         "started": timestamps[0] if timestamps else None,
         "ended": timestamps[-1] if timestamps else None,
         **activity_stats(timestamps),
     }
+
+
+def format_model(model_id):
+    """'claude-sonnet-4-5-20250929' -> 'Sonnet 4.5'; ids that don't match are shown as-is."""
+    match = re.fullmatch(r"claude-([a-z]+)((?:-\d+)+?)(?:-\d{8})?", model_id)
+    if not match:
+        return model_id
+    return f"{match[1].capitalize()} {match[2][1:].replace('-', '.')}"
 
 
 def parse_timestamp(value):
@@ -148,9 +166,10 @@ def session_row(session_id, cost, biggest, info):
     per_minute = f"${cost / minutes:.3f}" if minutes >= 1 else "-"
     gap_count = info.get("gap_count", 0)
     miss_pct = f"{info.get('cache_misses', 0) / gap_count * 100:.0f}%" if gap_count else "-"
+    session_label = ", ".join([session_id, *map(format_model, info.get("models", []))])
     return (
         f'<div class="session"><div class="what"><span class="title">{html.escape(info.get("title") or "(no title)")}</span>'
-        f'<code>{html.escape(info.get("project", ""))} &middot; {html.escape(session_id)}</code></div>'
+        f'<code>{html.escape(info.get("project", ""))} &middot; {html.escape(session_label)}</code></div>'
         f'<span class="bar"><i style="width:{cost / biggest * 100:.1f}%"></i></span>'
         f'<span class="duration">{format_duration(minutes * 60) if minutes else ""}</span>'
         f'<span class="active">{format_duration(info.get("active_seconds", 0.0))}</span>'
@@ -201,7 +220,7 @@ def render_report(state, start, end):
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Claude Code Spend</title>
 <style>
 :root {{ color-scheme: light dark; --line: #8884; --accent: #4f7cff; --muted: #8888; }}
-body {{ font: 14px system-ui; margin: 24px; max-width: 1150px; }}
+body {{ font: 14px system-ui; margin: 24px; max-width: 1320px; }}
 table {{ border-collapse: collapse; width: 100%; }}
 td, th {{ text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }}
 .toggle {{ font: inherit; color: var(--accent); background: none; border: 1px solid var(--line);
@@ -212,7 +231,7 @@ td, th {{ text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--lin
 .detail td {{ padding: 0; border-bottom: 1px solid var(--line); }}
 .panel {{ margin: 6px 8px 12px; padding: 8px 12px; max-height: 320px; overflow-y: auto;
   border: 1px solid var(--line); border-radius: 8px; background: #8881; box-shadow: 0 4px 12px #0002; }}
-.session {{ display: grid; grid-template-columns: minmax(0, 1fr) 90px 63px 63px 63px 56px 63px 112px 112px 77px; gap: 12px; align-items: center; padding: 3px 0; }}
+.session {{ display: grid; grid-template-columns: minmax(440px, 1fr) 90px 63px 63px 63px 56px 63px 112px 112px 77px; gap: 12px; align-items: center; padding: 3px 0; }}
 .session .what {{ display: flex; flex-direction: column; min-width: 0; }}
 .session .title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .session code {{ font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }}
