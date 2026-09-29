@@ -13,10 +13,11 @@ command -v npx >/dev/null || { echo "npx not found; install Node.js first" >&2; 
 [ -d "$HOME/.claude/projects" ] || { echo "no ~/.claude/projects; run Claude Code at least once" >&2; exit 1; }
 
 [ -x .venv/bin/python3 ] || python3 -m venv .venv
-.venv/bin/python3 -m unittest
+.venv/bin/python3 -m pip install --quiet -r requirements-dev.txt
+.venv/bin/python3 -m pytest
 
 # Backfill date is only for this first run; the daily job collects from the start of the month.
-.venv/bin/python3 spend_tracker.py "$@"
+.venv/bin/python3 daily_tracker.py "$@"
 
 ./install.sh
 echo "Report: $DIR/report.html"

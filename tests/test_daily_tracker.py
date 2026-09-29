@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from datetime import date
 
-import spend_tracker as st
+import daily_tracker as st
 
 
 class MergeTest(unittest.TestCase):

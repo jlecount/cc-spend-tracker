@@ -23,7 +23,7 @@ cat > "$PLIST" <<PLIST_EOF
   <key>ProgramArguments</key>
   <array>
     <string>$DIR/.venv/bin/python3</string>
-    <string>$DIR/spend_hourly.py</string>
+    <string>$DIR/hourly_tracker.py</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>$NODE_BIN_DIR:/usr/bin:/bin</string></dict>

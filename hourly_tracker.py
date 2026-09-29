@@ -1,6 +1,6 @@
 """Intra-day Claude Code spend report by completed hour.
 
-Usage: spend_hourly.py
+Usage: hourly_tracker.py
 
 Reads today's hourly cost from ccost and writes report_hourly.html with one row
 per completed local hour since midnight. The hour in progress is left out.

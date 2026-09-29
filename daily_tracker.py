@@ -1,6 +1,6 @@
 """Daily Claude Code spend tracker.
 
-Usage: spend_tracker.py [YYYY-MM-DD]  (optional date backfills from that day)
+Usage: daily_tracker.py [YYYY-MM-DD]  (optional date backfills from that day)
 
 Collects cost from ccusage into spend.json, writes report.html covering the
 start of the month (or first record, if earlier) through yesterday, and sends a
