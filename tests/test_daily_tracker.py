@@ -391,6 +391,47 @@ class MonthBlockTest(unittest.TestCase):
         self.assertLess(page.index('class="target"'), page.index('class="month-block prior"'))
 
 
+class SummaryScopeTest(unittest.TestCase):
+    state = {"days": {
+        "2026-09-10": {"total": 30.0, "sessions": {}},
+        "2026-09-11": {"total": 10.0, "sessions": {}},
+        "2026-10-01": {"total": 6.0, "sessions": {}},
+        "2026-10-02": {"total": 4.0, "sessions": {}},
+    }}
+
+    def panel(self, page, scope):
+        match = re.search(rf'<div class="summary-panel" data-scope="{scope}"[^>]*>(.*?)</p></div>', page, re.S)
+        self.assertIsNotNone(match, scope)
+        return match.group(1)
+
+    def render(self):
+        return st.render_report(self.state, date(2026, 9, 10), date(2026, 10, 2), today=date(2026, 10, 3), weights=WEIGHTS)
+
+    def test_each_scope_has_its_own_totals(self):
+        page = self.render()
+        current, prior, everything = (self.panel(page, s) for s in ("current", "prior", "all"))
+        self.assertIn("$10.00", current)
+        self.assertIn("$40.00", prior)
+        self.assertIn("$50.00", everything)
+
+    def test_each_scope_counts_only_its_days_and_shows_its_own_date_range(self):
+        page = self.render()
+        self.assertIn("2026-10-01 to 2026-10-02", self.panel(page, "current"))
+        self.assertIn("2026-09-10 to 2026-09-30", self.panel(page, "prior"))
+        self.assertIn("2026-09-10 to 2026-10-02", self.panel(page, "all"))
+        self.assertIn(">Days</div><div class=\"value\">21<", self.panel(page, "prior"))
+
+    def test_current_month_is_selected_first(self):
+        page = self.render()
+        self.assertIn('class="scope-pill" data-scope="current" aria-pressed="true"', page)
+        self.assertIn('class="scope-pill" data-scope="prior" aria-pressed="false"', page)
+
+    def test_without_today_only_all_time_is_offered(self):
+        page = st.render_report(self.state, date(2026, 9, 10), date(2026, 10, 2))
+        self.assertNotIn('data-scope="current"', page)
+        self.assertIn('class="scope-pill" data-scope="all" aria-pressed="true"', page)
+
+
 class TargetTest(unittest.TestCase):
     def test_over_target_states_reduction_range_of_remaining_spend(self):
         # actual 100: low 250 needs 50 of 150 remaining (34%); high 300 needs 100 of 200 (50%)

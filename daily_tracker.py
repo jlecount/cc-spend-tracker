@@ -2,10 +2,11 @@
 
 Usage: daily_tracker.py [YYYY-MM-DD]  (optional date backfills from that day)
 
-Collects cost from ccusage into spend.json, writes report.html covering the
+Collects cost from ccusage into spend.json, writes report_daily.html covering the
 start of the month (or first record, if earlier) through yesterday, and sends a
 macOS notification. Costs are ccusage estimates (token counts x list prices).
 """
+
 import html
 import json
 import math
@@ -20,7 +21,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 STATE_PATH = HERE / "spend.json"
-REPORT_PATH = HERE / "report.html"
+REPORT_PATH = HERE / "report_daily.html"
 WEIGHTS_PATH = HERE / ".weights.json"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 # Placeholder model name Claude Code writes on locally generated messages.
@@ -52,8 +53,12 @@ def merge(state, daily_rows, session_rows):
         cumulative[session_id] = cost
         if delta <= 1e-9:
             continue
-        last_active = datetime.fromisoformat(row["metadata"]["lastActivity"].replace("Z", "+00:00"))
-        day = state["days"].setdefault(str(last_active.astimezone().date()), {"total": 0.0, "sessions": {}})
+        last_active = datetime.fromisoformat(
+            row["metadata"]["lastActivity"].replace("Z", "+00:00")
+        )
+        day = state["days"].setdefault(
+            str(last_active.astimezone().date()), {"total": 0.0, "sessions": {}}
+        )
         day["sessions"][session_id] = day["sessions"].get(session_id, 0.0) + delta
 
 
@@ -71,8 +76,10 @@ def activity_stats(timestamps, ttl_seconds=CACHE_TTL_SECONDS):
         else:
             active_seconds += gap
     return {
-        "active_seconds": active_seconds, "idle_seconds": idle_seconds,
-        "gap_count": max(len(ordered) - 1, 0), "cache_misses": cache_misses,
+        "active_seconds": active_seconds,
+        "idle_seconds": idle_seconds,
+        "gap_count": max(len(ordered) - 1, 0),
+        "cache_misses": cache_misses,
     }
 
 
@@ -101,7 +108,8 @@ def read_session_info(log_path):
                 first_prompt = content.strip().replace("\n", " ")[:80]
     timestamps.sort()
     return {
-        "title": title or first_prompt or "", "project": project or "",
+        "title": title or first_prompt or "",
+        "project": project or "",
         "models": [model for model, _ in model_counts.most_common()],
         "started": timestamps[0] if timestamps else None,
         "ended": timestamps[-1] if timestamps else None,
@@ -134,7 +142,11 @@ def describe_span(info):
     if not info.get("started"):
         return "", "", 0.0
     started, ended = parse_timestamp(info["started"]), parse_timestamp(info["ended"])
-    return f"{started:%b %d %H:%M}", f"{ended:%b %d %H:%M}", (ended - started).total_seconds() / 60
+    return (
+        f"{started:%b %d %H:%M}",
+        f"{ended:%b %d %H:%M}",
+        (ended - started).total_seconds() / 60,
+    )
 
 
 def update_session_info(state, session_ids, projects_dir=PROJECTS_DIR):
@@ -158,8 +170,18 @@ def report_range(state, today):
 
 def run_ccusage(subcommand, since):
     result = subprocess.run(
-        ["npx", "--yes", "ccusage@latest", subcommand, "--json", "--since", since.strftime("%Y%m%d")],
-        capture_output=True, text=True, check=True,
+        [
+            "npx",
+            "--yes",
+            "ccusage@latest",
+            subcommand,
+            "--json",
+            "--since",
+            since.strftime("%Y%m%d"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return json.loads(result.stdout)[subcommand]
 
@@ -168,11 +190,13 @@ def session_row(session_id, cost, biggest, info):
     start_text, end_text, minutes = describe_span(info)
     per_minute = f"${cost / minutes:.3f}" if minutes >= 1 else "-"
     gap_count = info.get("gap_count", 0)
-    miss_pct = f"{info.get('cache_misses', 0) / gap_count * 100:.0f}%" if gap_count else "-"
+    miss_pct = (
+        f"{info.get('cache_misses', 0) / gap_count * 100:.0f}%" if gap_count else "-"
+    )
     session_label = ", ".join([session_id, *map(format_model, info.get("models", []))])
     return (
         f'<div class="session"><div class="what"><span class="title">{html.escape(info.get("title") or "(no title)")}</span>'
-        f'<code>{html.escape(info.get("project", ""))} &middot; {html.escape(session_label)}</code></div>'
+        f"<code>{html.escape(info.get('project', ''))} &middot; {html.escape(session_label)}</code></div>"
         f'<span class="bar"><i style="width:{cost / biggest * 100:.1f}%"></i></span>'
         f'<span class="duration">{format_duration(minutes * 60) if minutes else ""}</span>'
         f'<span class="active">{format_duration(info.get("active_seconds", 0.0))}</span>'
@@ -200,16 +224,22 @@ def load_weights(path):
     """Share of a full day's spend expected on each weekday, Monday first. Raises ValueError if the
     file is missing or invalid, so a typo can't silently change the projections."""
     if not path.exists():
-        raise ValueError(f"{path} not found; ./setup.sh creates it with the default weights")
+        raise ValueError(
+            f"{path} not found; ./setup.sh creates it with the default weights"
+        )
     try:
         raw = json.loads(path.read_text())
     except json.JSONDecodeError as error:
         raise ValueError(f"{path} is not valid JSON: {error}") from error
     if not isinstance(raw, dict):
-        raise ValueError(f"{path} must be a JSON object with keys: {', '.join(WEEKDAY_KEYS)}")
+        raise ValueError(
+            f"{path} must be a JSON object with keys: {', '.join(WEEKDAY_KEYS)}"
+        )
     missing, unknown = set(WEEKDAY_KEYS) - set(raw), set(raw) - set(WEEKDAY_KEYS)
     if missing or unknown:
-        raise ValueError(f"{path}: missing keys {sorted(missing)}, unknown keys {sorted(unknown)}")
+        raise ValueError(
+            f"{path}: missing keys {sorted(missing)}, unknown keys {sorted(unknown)}"
+        )
     for key, value in raw.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ValueError(f"{path}: {key} must be a number >= 0, got {value!r}")
@@ -231,18 +261,30 @@ def project_month(state, today, days_in_month, weights):
     actual = cumulative_series(state, first, yesterday)
     days = [first + timedelta(days=i) for i in range(len(actual))]
     costs = [state["days"].get(str(day), {}).get("total", 0.0) for day in days]
-    working = [(day, cost) for day, cost in zip(days, costs) if weights[day.weekday()] > 0]
+    working = [
+        (day, cost) for day, cost in zip(days, costs) if weights[day.weekday()] > 0
+    ]
     if not working:
         return None
     remaining = [today + timedelta(days=i) for i in range(days_in_month - len(actual))]
 
-    recent = [(day, cost) for day, cost in working if day >= days[-1] - timedelta(days=6)]
-    weekly_rate = sum(cost for _, cost in recent) / sum(weights[day.weekday()] for day, _ in recent) if recent else None
+    recent = [
+        (day, cost) for day, cost in working if day >= days[-1] - timedelta(days=6)
+    ]
+    weekly_rate = (
+        sum(cost for _, cost in recent)
+        / sum(weights[day.weekday()] for day, _ in recent)
+        if recent
+        else None
+    )
     base_day, base_cost = working[-1]
     daily_amount = base_cost / weights[base_day.weekday()] * sum(weights) / len(weights)
     return {
         "actual": actual,
-        "weekly": _running_total(actual[-1], [(weekly_rate or 0.0) * weights[day.weekday()] for day in remaining]),
+        "weekly": _running_total(
+            actual[-1],
+            [(weekly_rate or 0.0) * weights[day.weekday()] for day in remaining],
+        ),
         "daily": _running_total(actual[-1], [daily_amount] * len(remaining)),
     }
 
@@ -279,8 +321,15 @@ def target_message(actual, low, high, target):
     if high <= target:
         return f"On track to complete month with ${high:.0f} spend.", green
     if actual >= target:
-        return f"Target of ${target:.0f} already exceeded with ${actual:.0f} spent.", yellow
-    needed = lambda projected: math.ceil((projected - target) / (projected - actual) * 100) if projected > target else 0
+        return (
+            f"Target of ${target:.0f} already exceeded with ${actual:.0f} spent.",
+            yellow,
+        )
+    needed = lambda projected: (
+        math.ceil((projected - target) / (projected - actual) * 100)
+        if projected > target
+        else 0
+    )
     return (
         f"Target reduction of use between apx {needed(low)}% and {needed(high)}% for the rest of the month "
         f"in order to hit ${target:.0f} by end of month",
@@ -289,8 +338,10 @@ def target_message(actual, low, high, target):
 
 
 def render_weekly_weights(weights):
-    days = " &middot; ".join(f"{key.capitalize()} {weight:g}" for key, weight in zip(WEEKDAY_KEYS, weights))
-    return f'<p class="weights"><b>Weekly weights:</b> {days}</p>'
+    days = " &middot; ".join(
+        f"{key.capitalize()} {weight:g}" for key, weight in zip(WEEKDAY_KEYS, weights)
+    )
+    return f'<p class="weights"><b>Weekly projection weights:</b> {days}</p>'
 
 
 def render_target(text, color):
@@ -327,14 +378,18 @@ def rounded_top_bar(x, y, width, height, radius=4):
     )
 
 
-def render_line_chart(title, lines, days_in_month, chart_id, marker=None, date_prefix="Day"):
+def render_line_chart(
+    title, lines, days_in_month, chart_id, marker=None, date_prefix="Day"
+):
     """lines: (label, color, dashed, first_day_of_month, values). X axis is day of month, Y is cumulative $.
     marker: optional (day_of_month, label) drawn as a dashed vertical line with the label above the plot.
     date_prefix: month name the hover tooltip puts before the day number."""
     width, height, left, right, top, bottom = 640, 260, 48, 16, 30, 32
     data_peak = max(max(values) for *_, values in lines) or 0.01
     step, peak = nice_axis(data_peak)
-    x_at = lambda day: left + (day - 1) / max(days_in_month - 1, 1) * (width - left - right)
+    x_at = lambda day: (
+        left + (day - 1) / max(days_in_month - 1, 1) * (width - left - right)
+    )
     y_at = lambda cost: height - bottom - cost / peak * (height - top - bottom)
     parts = []
     for tick in range(round(peak / step) + 1):
@@ -345,7 +400,9 @@ def render_line_chart(title, lines, days_in_month, chart_id, marker=None, date_p
         )
     for day in range(1, days_in_month + 1):
         if day == 1 or day % 5 == 0 or day == days_in_month:
-            parts.append(f'<text class="tick" x="{x_at(day):.1f}" y="{height - bottom + 18}" text-anchor="middle">{day}</text>')
+            parts.append(
+                f'<text class="tick" x="{x_at(day):.1f}" y="{height - bottom + 18}" text-anchor="middle">{day}</text>'
+            )
     for floor, ceiling, _ in SPEND_BANDS:
         if floor <= data_peak:
             y_top = y_at(min(ceiling, peak)) if ceiling else top
@@ -364,14 +421,20 @@ def render_line_chart(title, lines, days_in_month, chart_id, marker=None, date_p
         )
     legend, strokes, end_dots, series_data = [], [], [], []
     for label, color, dashed, first_day, values in lines:
-        points = " ".join(f"{x_at(first_day + i):.1f},{y_at(v):.1f}" for i, v in enumerate(values))
+        points = " ".join(
+            f"{x_at(first_day + i):.1f},{y_at(v):.1f}" for i, v in enumerate(values)
+        )
         dash = ' stroke-dasharray="6 5"' if dashed else ""
         area = f"{x_at(first_day):.1f},{y_at(0):.1f} {points} {x_at(first_day + len(values) - 1):.1f},{y_at(0):.1f}"
         if not dashed:
-            parts.append(f'<polygon points="{area}" fill="{color}" fill-opacity="0.10"/>')
+            parts.append(
+                f'<polygon points="{area}" fill="{color}" fill-opacity="0.10"/>'
+            )
         for floor, _, fill in SPEND_BANDS:
             if floor <= data_peak:
-                parts.append(f'<polygon points="{area}" fill="{fill}" fill-opacity="0.30" clip-path="url(#{chart_id}-band-{floor})"/>')
+                parts.append(
+                    f'<polygon points="{area}" fill="{fill}" fill-opacity="0.30" clip-path="url(#{chart_id}-band-{floor})"/>'
+                )
         strokes.append(
             f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"{dash}>'
             f"<title>{label}: ${values[-1]:.2f}</title></polyline>"
@@ -379,13 +442,33 @@ def render_line_chart(title, lines, days_in_month, chart_id, marker=None, date_p
         end_dots.append(
             f'<circle cx="{x_at(first_day + len(values) - 1):.1f}" cy="{y_at(values[-1]):.1f}" r="4" fill="{color}" stroke="var(--surface)" stroke-width="2"/>'
         )
-        legend.append(f'<span><i style="background:{color}"></i>{label}: ${values[-1]:.2f}</span>')
-        series_data.append({"label": label, "color": color, "dashed": dashed, "first": first_day, "values": [round(v, 2) for v in values]})
+        legend.append(
+            f'<span><i style="background:{color}"></i>{label}: ${values[-1]:.2f}</span>'
+        )
+        series_data.append(
+            {
+                "label": label,
+                "color": color,
+                "dashed": dashed,
+                "first": first_day,
+                "values": [round(v, 2) for v in values],
+            }
+        )
     geometry = {
-        "width": width, "height": height, "left": left, "right": right, "top": top, "bottom": bottom,
-        "peak": peak, "days": days_in_month, "prefix": date_prefix, "series": series_data,
+        "width": width,
+        "height": height,
+        "left": left,
+        "right": right,
+        "top": top,
+        "bottom": bottom,
+        "peak": peak,
+        "days": days_in_month,
+        "prefix": date_prefix,
+        "series": series_data,
     }
-    legend_html = f'<div class="legend">{"".join(legend)}</div>' if len(lines) > 1 else ""
+    legend_html = (
+        f'<div class="legend">{"".join(legend)}</div>' if len(lines) > 1 else ""
+    )
     return (
         f'<figure class="trend card"><figcaption>{title}</figcaption>'
         f'<div class="plot" data-geometry="{html.escape(json.dumps(geometry), quote=True)}">'
@@ -407,29 +490,57 @@ def render_trend_charts(state, today, weights):
     last_last = this_first - timedelta(days=1)
     last_first = last_last.replace(day=1)
     if not any(last_first <= date.fromisoformat(d) <= last_last for d in state["days"]):
-        raise ValueError(f"No spend records for {last_first:%B %Y}; backfill with ./setup.sh {last_first}")
+        raise ValueError(
+            f"No spend records for {last_first:%B %Y}; backfill with ./setup.sh {last_first}"
+        )
     last_month_total = cumulative_series(state, last_first, last_last)[-1]
     last_month = render_line_chart(
         f"{last_first:%B %Y} cumulative spend",
-        [("actual spend", "var(--series-1)", False, 1, cumulative_series(state, last_first, last_last))],
+        [
+            (
+                "actual spend",
+                "var(--series-1)",
+                False,
+                1,
+                cumulative_series(state, last_first, last_last),
+            )
+        ],
         last_last.day,
         "last-month",
         date_prefix=f"{last_first:%b}",
     )
-    prior_block = month_block("prior", "Prior month", f'<div class="chart-row">{last_month}'
-                              f'{render_month_total("Month total", f"${last_month_total:.0f}", total_color(last_month_total))}</div>')
+    prior_block = month_block(
+        "prior",
+        "Prior month",
+        f'<div class="chart-row">{last_month}'
+        f"{render_month_total('Month total', f'${last_month_total:.0f}', total_color(last_month_total))}</div>",
+    )
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     projection = project_month(state, today, days_in_month, weights)
     if projection is None:
         empty = f'<div class="chart-row"><figure class="trend"><figcaption>{today:%B %Y} cumulative spend</figcaption><p>No completed working days yet.</p></figure></div>'
-        return weights_line + month_block("current", "Current month", empty) + prior_block
+        return (
+            weights_line + month_block("current", "Current month", empty) + prior_block
+        )
     last_actual_day = len(projection["actual"])
     this_month = render_line_chart(
         f"{today:%B %Y} cumulative spend",
         [
             ("actual spend", "var(--series-1)", False, 1, projection["actual"]),
-            ("weekly trend projection", "var(--series-2)", True, last_actual_day, projection["weekly"]),
-            ("daily trend projection", "var(--series-3)", True, last_actual_day, projection["daily"]),
+            (
+                "weekly trend projection",
+                "var(--series-2)",
+                True,
+                last_actual_day,
+                projection["weekly"],
+            ),
+            (
+                "daily trend projection",
+                "var(--series-3)",
+                True,
+                last_actual_day,
+                projection["daily"],
+            ),
         ],
         days_in_month,
         "this-month",
@@ -440,8 +551,14 @@ def render_trend_charts(state, today, weights):
     this_month_total = render_month_total(
         "Projected month total", f"${low:.0f} &rarr; ${high:.0f}", total_color(high)
     )
-    target = render_target(*target_message(projection["actual"][-1], low, high, MONTHLY_TARGET))
-    current_block = month_block("current", "Current month", f'<div class="chart-row">{this_month}{this_month_total}</div>{target}')
+    target = render_target(
+        *target_message(projection["actual"][-1], low, high, MONTHLY_TARGET)
+    )
+    current_block = month_block(
+        "current",
+        "Current month",
+        f'<div class="chart-row">{this_month}{this_month_total}</div>{target}',
+    )
     return weights_line + current_block + prior_block
 
 
@@ -464,9 +581,11 @@ body { font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 
   background: var(--page); color: var(--ink); }
 main { max-width: 1320px; margin: 0 auto; }
 h1 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 4px; }
-.subtitle { color: var(--ink-2); margin: 0 0 20px; }
-.stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
-.stat { padding: 12px 18px; min-width: 150px; }
+.summary { padding: 16px 20px 14px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 14px; }
+.summary-panel[hidden] { display: none; }
+.stats { display: flex; flex-wrap: wrap; gap: 12px 40px; }
+.stat { min-width: 150px; }
+.summary-range { margin: 12px 0 0; font-size: 13px; color: var(--ink-2); }
 .stat .label, .month-total .label { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .stat .value { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; }
 .weights { margin: 0 0 20px; font-size: 13px; color: var(--ink-2); white-space: nowrap; overflow-x: auto; }
@@ -531,10 +650,10 @@ tr:not(.detail):hover td { background: color-mix(in srgb, var(--muted) 8%, trans
 .detail td { padding: 0; }
 .filter-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 .pills { display: flex; flex-wrap: wrap; gap: 8px; }
-.pill { font: inherit; font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--border);
+.pill, .scope-pill { font: inherit; font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--border);
   border-radius: 999px; padding: 4px 14px; cursor: pointer; display: inline-flex; gap: 8px; align-items: baseline; }
-.pill:hover { color: var(--ink); border-color: var(--muted); }
-.pill[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.pill:hover, .scope-pill:hover { color: var(--ink); border-color: var(--muted); }
+.pill[aria-pressed="true"], .scope-pill[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 .pill-total { font-variant-numeric: tabular-nums; opacity: 0.7; }
 .toggle-all { font: inherit; font-size: 13px; color: var(--ink-2); background: none; border: none; cursor: pointer; padding: 4px 8px; }
 .toggle-all:hover { color: var(--ink); text-decoration: underline; }
@@ -604,6 +723,16 @@ document.getElementById("expand-all").addEventListener("click", function () {
 });
 document.querySelectorAll(".toggle").forEach(function (t) { t.addEventListener("click", syncExpandAll); });
 selectMonth(document.querySelector(".pill").dataset.month);
+document.querySelectorAll(".scope-pill").forEach(function (pill) {
+  pill.addEventListener("click", function () {
+    document.querySelectorAll(".scope-pill").forEach(function (other) {
+      other.setAttribute("aria-pressed", String(other === pill));
+    });
+    document.querySelectorAll(".summary-panel").forEach(function (panel) {
+      panel.hidden = panel.dataset.scope !== pill.dataset.scope;
+    });
+  });
+});
 var SVG_NS = "http://www.w3.org/2000/svg";
 document.querySelectorAll(".plot").forEach(function (plot) {
   var g = JSON.parse(plot.dataset.geometry);
@@ -675,21 +804,41 @@ def render_daily_bars(days, totals):
         x = left + gap / 2 + i * (bar_w + gap)
         h = total / peak * chart_h
         if i == 0 or d.day == 1:
-            parts.append(f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h + 32}" text-anchor="middle" style="fill:var(--ink-2);font-weight:600">{d:%b}</text>')
+            parts.append(
+                f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h + 32}" text-anchor="middle" style="fill:var(--ink-2);font-weight:600">{d:%b}</text>'
+            )
         if i == 0 or d.day == 1 or d.day % 5 == 0 or i == len(days) - 1:
-            parts.append(f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h + 18}" text-anchor="middle">{d.day}</text>')
+            parts.append(
+                f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h + 18}" text-anchor="middle">{d.day}</text>'
+            )
         parts.append(
             f'<rect class="hit" x="{x - gap / 2:.1f}" y="{top}" width="{bar_w + gap}" height="{chart_h}"><title>{d}: ${total:.2f}</title></rect>'
         )
-        title = f"<title>{d}: ${total:.2f}" + (f" (${total - DAILY_CAP:.2f} over the ${DAILY_CAP:.2f} daily cap)" if total > DAILY_CAP else "") + "</title>"
+        title = (
+            f"<title>{d}: ${total:.2f}"
+            + (
+                f" (${total - DAILY_CAP:.2f} over the ${DAILY_CAP:.2f} daily cap)"
+                if total > DAILY_CAP
+                else ""
+            )
+            + "</title>"
+        )
         if total > DAILY_CAP:
             base_h = DAILY_CAP / peak * chart_h
-            parts.append(f'<path class="bar" d="{rounded_top_bar(x, top + chart_h - base_h, bar_w, base_h, radius=0)}">{title}</path>')
-            parts.append(f'<path class="bar over" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h - base_h)}">{title}</path>')
+            parts.append(
+                f'<path class="bar" d="{rounded_top_bar(x, top + chart_h - base_h, bar_w, base_h, radius=0)}">{title}</path>'
+            )
+            parts.append(
+                f'<path class="bar over" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h - base_h)}">{title}</path>'
+            )
         elif h >= 0.5:
-            parts.append(f'<path class="bar" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h)}">{title}</path>')
+            parts.append(
+                f'<path class="bar" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h)}">{title}</path>'
+            )
         if total > 0:
-            parts.append(f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h - h - 6:.1f}" text-anchor="middle" style="fill:var(--ink)">{"&lt;$1" if total < 0.5 else f"${total:.0f}"}</text>')
+            parts.append(
+                f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h - h - 6:.1f}" text-anchor="middle" style="fill:var(--ink)">{"&lt;$1" if total < 0.5 else f"${total:.0f}"}</text>'
+            )
     parts.append(
         f'<line class="cap-line" x1="{left}" x2="{width - 8}" y1="{y_at(DAILY_CAP):.1f}" y2="{y_at(DAILY_CAP):.1f}"><title>Daily cap: ${DAILY_CAP:.2f} (${MONTHLY_TARGET} / 30)</title></line>'
     )
@@ -718,14 +867,65 @@ def render_month_filter(days, totals):
     )
 
 
+def render_summary(days, totals, today):
+    """Stat card at the top of the page; pills pick current month, prior month, or all time."""
+    scopes = []
+    if today:
+        this_month = (today.year, today.month)
+        prior_last = today.replace(day=1) - timedelta(days=1)
+        for key, label, month in (
+            ("current", "Current month", this_month),
+            ("prior", "Prior month", (prior_last.year, prior_last.month)),
+        ):
+            picked = [
+                (d, t) for d, t in zip(days, totals) if (d.year, d.month) == month
+            ]
+            if picked:
+                scopes.append((key, label, picked))
+    scopes.append(("all", "All time", list(zip(days, totals))))
+    pills, panels = [], []
+    for i, (key, label, picked) in enumerate(scopes):
+        selected = i == 0
+        spent = sum(t for _, t in picked)
+        stats = "".join(
+            f'<div class="stat"><div class="label">{name}</div><div class="value">{value}</div></div>'
+            for name, value in (
+                ("Total spend", f"${spent:,.2f}"),
+                ("Days", str(len(picked))),
+                ("Average per day", f"${spent / len(picked):.2f}"),
+            )
+        )
+        pills.append(
+            f'<button class="scope-pill" data-scope="{key}" aria-pressed="{"true" if selected else "false"}">{label}</button>'
+        )
+        panels.append(
+            f'<div class="summary-panel" data-scope="{key}"{"" if selected else " hidden"}><div class="stats">{stats}</div>'
+            f'<p class="summary-range">{picked[0][0]} to {picked[-1][0]}. Estimated from token counts at list prices.</p></div>'
+        )
+    return (
+        '<section class="summary card"><div class="pills" role="group" aria-label="Summarize spend for">'
+        + "".join(pills)
+        + "</div>"
+        + "".join(panels)
+        + "</section>"
+    )
+
+
 def render_report(state, start, end, today=None, weights=None):
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     totals = [state["days"].get(str(d), {}).get("total", 0.0) for d in days]
     rows = []
     for d, total in reversed(list(zip(days, totals))):
-        sessions = sorted(state["days"].get(str(d), {}).get("sessions", {}).items(), key=lambda kv: -kv[1])
+        sessions = sorted(
+            state["days"].get(str(d), {}).get("sessions", {}).items(),
+            key=lambda kv: -kv[1],
+        )
         average = f"${total / len(sessions):.2f}" if sessions else "-"
-        toggle = f'<button class="toggle" aria-expanded="false" data-day="{d}">Sessions</button>' if sessions else ""
+        toggle = (
+            f'<button class="toggle" aria-expanded="false" data-day="{d}">Sessions</button>'
+            if sessions
+            else ""
+        )
         month = f"{d:%Y-%m}"
         rows.append(
             f'<tr data-month="{month}"><td>{d}</td><td>${total:.2f}</td><td>{len(sessions)}</td><td>{average}</td><td>{toggle}</td></tr>'
@@ -738,26 +938,23 @@ def render_report(state, start, end, today=None, weights=None):
                 "<span>Active</span><span>Idle</span><span>Miss %</span><span>Cost</span>"
                 "<span>Start</span><span>End</span><span>Cost/min</span></div>"
             )
-            items = header + "".join(session_row(sid, cost, biggest, info.get(sid, {})) for sid, cost in sessions)
-            rows.append(f'<tr class="detail" data-month="{month}" id="detail-{d}" hidden><td colspan="5"><div class="panel">{items}</div></td></tr>')
+            items = header + "".join(
+                session_row(sid, cost, biggest, info.get(sid, {}))
+                for sid, cost in sessions
+            )
+            rows.append(
+                f'<tr class="detail" data-month="{month}" id="detail-{d}" hidden><td colspan="5"><div class="panel">{items}</div></td></tr>'
+            )
 
     if today and weights is None:
         raise ValueError("weights are required to render trend charts")
     trend_charts = render_trend_charts(state, today, weights) if today else ""
-    stats = "".join(
-        f'<div class="stat card"><div class="label">{label}</div><div class="value">{value}</div></div>'
-        for label, value in (
-            ("Total spend", f"${sum(totals):,.2f}"),
-            ("Days", str(len(days))),
-            ("Average per day", f"${sum(totals) / len(days):.2f}"),
-        )
-    )
+    summary = render_summary(days, totals, today)
     month_filter = render_month_filter(days, totals)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Claude Code Spend</title>
 <style>{REPORT_CSS}</style></head><body><main>
 <h1>Claude Code spend</h1>
-<p class="subtitle">{start} to {end}. Estimated from token counts at list prices.</p>
-<div class="stats">{stats}</div>
+{summary}
 <div class="charts">{trend_charts}</div>
 <section class="daily card"><h2>Daily spend</h2>{render_daily_bars(days, totals)}</section>
 {month_filter}
@@ -768,7 +965,11 @@ def render_report(state, start, end, today=None, weights=None):
 
 def notify(message):
     subprocess.run(
-        ["osascript", "-e", f'display notification {json.dumps(message)} with title "Claude Code spend"'],
+        [
+            "osascript",
+            "-e",
+            f'display notification {json.dumps(message)} with title "Claude Code spend"',
+        ],
         check=True,
     )
 
@@ -776,16 +977,29 @@ def notify(message):
 def main():
     today = date.today()
     state = json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else empty_state()
-    since = date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else collection_start(state, today)
+    since = (
+        date.fromisoformat(sys.argv[1])
+        if len(sys.argv) > 1
+        else collection_start(state, today)
+    )
     merge(state, run_ccusage("daily", since), run_ccusage("session", since))
-    update_session_info(state, {sid for day in state["days"].values() for sid in day["sessions"]})
+    update_session_info(
+        state, {sid for day in state["days"].values() for sid in day["sessions"]}
+    )
     STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True))
 
     start, end = report_range(state, today)
-    REPORT_PATH.write_text(render_report(state, start, end, today, load_weights(WEIGHTS_PATH)))
-    total = sum(state["days"].get(str(start + timedelta(days=i)), {}).get("total", 0.0) for i in range((end - start).days + 1))
+    REPORT_PATH.write_text(
+        render_report(state, start, end, today, load_weights(WEIGHTS_PATH))
+    )
+    total = sum(
+        state["days"].get(str(start + timedelta(days=i)), {}).get("total", 0.0)
+        for i in range((end - start).days + 1)
+    )
     yesterday = state["days"].get(str(end), {}).get("total", 0.0)
-    notify(f"Yesterday ${yesterday:.2f}. {start} to {end}: ${total:.2f}. Open {REPORT_PATH}")
+    notify(
+        f"Yesterday ${yesterday:.2f}. {start} to {end}: ${total:.2f}. Open {REPORT_PATH}"
+    )
 
 
 if __name__ == "__main__":

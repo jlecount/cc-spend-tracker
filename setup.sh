@@ -7,17 +7,29 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-[ "$(uname)" = "Darwin" ] || { echo "macOS only (uses launchd and osascript)" >&2; exit 1; }
-command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
-command -v npx >/dev/null || { echo "npx not found; install Node.js first" >&2; exit 1; }
-[ -d "$HOME/.claude/projects" ] || { echo "no ~/.claude/projects; run Claude Code at least once" >&2; exit 1; }
+[ "$(uname)" = "Darwin" ] || {
+  echo "macOS only (uses launchd and osascript)" >&2
+  exit 1
+}
+command -v python3 >/dev/null || {
+  echo "python3 not found" >&2
+  exit 1
+}
+command -v npx >/dev/null || {
+  echo "npx not found; install Node.js first" >&2
+  exit 1
+}
+[ -d "$HOME/.claude/projects" ] || {
+  echo "no ~/.claude/projects; run Claude Code at least once" >&2
+  exit 1
+}
 
 [ -x .venv/bin/python3 ] || python3 -m venv .venv
 .venv/bin/python3 -m pip install --quiet -r requirements-dev.txt
 .venv/bin/python3 -m pytest
 
 # Created once; edits are kept on reruns.
-[ -f .weights.json ] || cat > .weights.json <<'WEIGHTS_EOF'
+[ -f .weights.json ] || cat >.weights.json <<'WEIGHTS_EOF'
 {"mon": 1.0, "tue": 1.0, "wed": 1.0, "thu": 1.0, "fri": 1.0, "sat": 0, "sun": 0}
 WEIGHTS_EOF
 
@@ -25,4 +37,4 @@ WEIGHTS_EOF
 .venv/bin/python3 daily_tracker.py "$@"
 
 ./install.sh
-echo "Report: $DIR/report.html"
+echo "Report: $DIR/report_daily.html"
