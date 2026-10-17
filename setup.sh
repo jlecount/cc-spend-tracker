@@ -16,6 +16,11 @@ command -v npx >/dev/null || { echo "npx not found; install Node.js first" >&2; 
 .venv/bin/python3 -m pip install --quiet -r requirements-dev.txt
 .venv/bin/python3 -m pytest
 
+# Created once; edits are kept on reruns.
+[ -f .weights.json ] || cat > .weights.json <<'WEIGHTS_EOF'
+{"mon": 1.0, "tue": 1.0, "wed": 1.0, "thu": 1.0, "fri": 1.0, "sat": 0, "sun": 0}
+WEIGHTS_EOF
+
 # Backfill date is only for this first run; the daily job collects from the start of the month.
 .venv/bin/python3 daily_tracker.py "$@"
 

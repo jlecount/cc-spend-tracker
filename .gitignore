@@ -4,3 +4,4 @@ report.html
 run.log
 run_hourly.log
 report_hourly.html
+.weights.json
