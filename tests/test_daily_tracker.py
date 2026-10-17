@@ -441,3 +441,10 @@ class DailyCapBarsTest(unittest.TestCase):
 
     def test_cap_line_is_drawn(self):
         self.assertIn('class="cap-line"', st.render_daily_bars(self.days, [5.0, 20.0]))
+
+    def test_every_non_zero_day_has_a_value_label(self):
+        svg = st.render_daily_bars(self.days + [date(2026, 10, 3)], [5.0, 20.0, 0.0])
+        self.assertIn(">$5<", svg)
+        self.assertIn(">$20<", svg)
+        self.assertNotIn("fill:var(--ink)\">$0<", svg)
+        self.assertIn("&lt;$1", st.render_daily_bars(self.days, [0.3, 5.0]))

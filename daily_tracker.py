@@ -647,7 +647,7 @@ document.querySelectorAll(".plot").forEach(function (plot) {
 
 
 def render_daily_bars(days, totals):
-    """Bar chart of each day's total spend; the tallest bar carries its value, the rest show it on hover."""
+    """Bar chart of each day's total spend, with the value above every non-zero bar."""
     left, top, bar_w, gap, chart_h = 44, 20, 16, 6, 180
     step, peak = nice_axis(max(totals + [DAILY_CAP]))
     y_at = lambda cost: top + chart_h - cost / peak * chart_h
@@ -659,7 +659,6 @@ def render_daily_bars(days, totals):
             f'<line class="grid" x1="{left}" x2="{width - 8}" y1="{y_at(cost):.1f}" y2="{y_at(cost):.1f}"/>'
             f'<text class="tick" x="{left - 8}" y="{y_at(cost) + 3.5:.1f}" text-anchor="end">${cost:,.0f}</text>'
         )
-    tallest = totals.index(max(totals))
     for i, (d, total) in enumerate(zip(days, totals)):
         x = left + gap / 2 + i * (bar_w + gap)
         h = total / peak * chart_h
@@ -677,8 +676,8 @@ def render_daily_bars(days, totals):
             parts.append(f'<path class="bar over" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h - base_h)}">{title}</path>')
         elif h >= 0.5:
             parts.append(f'<path class="bar" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h)}">{title}</path>')
-        if i == tallest and total > 0:
-            parts.append(f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h - h - 6:.1f}" text-anchor="middle" style="fill:var(--ink)">${total:.0f}</text>')
+        if total > 0:
+            parts.append(f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h - h - 6:.1f}" text-anchor="middle" style="fill:var(--ink)">{"&lt;$1" if total < 0.5 else f"${total:.0f}"}</text>')
     parts.append(
         f'<line class="cap-line" x1="{left}" x2="{width - 8}" y1="{y_at(DAILY_CAP):.1f}" y2="{y_at(DAILY_CAP):.1f}"><title>Daily cap: ${DAILY_CAP:.2f} (${MONTHLY_TARGET} / 30)</title></line>'
     )
