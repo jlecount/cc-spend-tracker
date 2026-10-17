@@ -373,6 +373,24 @@ class WeeklyWeightsLineTest(unittest.TestCase):
         self.assertLess(page.index("Weekly weights"), page.index("<figure"))
 
 
+class MonthBlockTest(unittest.TestCase):
+    state = {"days": {"2026-09-15": {"total": 5.0, "sessions": {}}, "2026-10-01": {"total": 1.0, "sessions": {}}}}
+
+    def test_current_month_block_comes_before_prior_month_block(self):
+        page = st.render_trend_charts(self.state, date(2026, 10, 5), WEIGHTS)
+        self.assertLess(page.index('class="month-block current"'), page.index('class="month-block prior"'))
+        self.assertLess(page.index("October 2026 cumulative spend"), page.index("September 2026 cumulative spend"))
+
+    def test_each_block_is_labeled(self):
+        page = st.render_trend_charts(self.state, date(2026, 10, 5), WEIGHTS)
+        self.assertIn('<span class="month-tag">Current month</span>', page)
+        self.assertIn('<span class="month-tag">Prior month</span>', page)
+
+    def test_target_message_is_inside_the_current_block(self):
+        page = st.render_trend_charts(self.state, date(2026, 10, 5), WEIGHTS)
+        self.assertLess(page.index('class="target"'), page.index('class="month-block prior"'))
+
+
 class TargetTest(unittest.TestCase):
     def test_over_target_states_reduction_range_of_remaining_spend(self):
         # actual 100: low 250 needs 50 of 150 remaining (34%); high 300 needs 100 of 200 (50%)

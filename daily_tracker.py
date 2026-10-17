@@ -395,6 +395,11 @@ def render_line_chart(title, lines, days_in_month, chart_id, marker=None, date_p
     )
 
 
+def month_block(kind, tag, content):
+    """Labeled container so the current and prior month read as separate groups."""
+    return f'<section class="month-block {kind}"><div class="month-head"><span class="month-tag">{tag}</span></div>{content}</section>'
+
+
 def render_trend_charts(state, today, weights):
     """Raises ValueError when last month has no records, since its chart would be meaningless."""
     weights_line = render_weekly_weights(weights)
@@ -411,14 +416,13 @@ def render_trend_charts(state, today, weights):
         "last-month",
         date_prefix=f"{last_first:%b}",
     )
-    last_month = (
-        f'{weights_line}<div class="chart-row">{last_month}'
-        f'{render_month_total("Month total", f"${last_month_total:.0f}", total_color(last_month_total))}</div>'
-    )
+    prior_block = month_block("prior", "Prior month", f'<div class="chart-row">{last_month}'
+                              f'{render_month_total("Month total", f"${last_month_total:.0f}", total_color(last_month_total))}</div>')
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     projection = project_month(state, today, days_in_month, weights)
     if projection is None:
-        return last_month + f'<div class="chart-row"><figure class="trend"><figcaption>{today:%B %Y} cumulative spend</figcaption><p>No completed working days yet.</p></figure></div>'
+        empty = f'<div class="chart-row"><figure class="trend"><figcaption>{today:%B %Y} cumulative spend</figcaption><p>No completed working days yet.</p></figure></div>'
+        return weights_line + month_block("current", "Current month", empty) + prior_block
     last_actual_day = len(projection["actual"])
     this_month = render_line_chart(
         f"{today:%B %Y} cumulative spend",
@@ -437,7 +441,8 @@ def render_trend_charts(state, today, weights):
         "Projected month total", f"${low:.0f} &rarr; ${high:.0f}", total_color(high)
     )
     target = render_target(*target_message(projection["actual"][-1], low, high, MONTHLY_TARGET))
-    return last_month + f'<div class="chart-row">{this_month}{this_month_total}</div>{target}'
+    current_block = month_block("current", "Current month", f'<div class="chart-row">{this_month}{this_month_total}</div>{target}')
+    return weights_line + current_block + prior_block
 
 
 REPORT_CSS = """
@@ -467,6 +472,13 @@ h1 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 4px
 .weights { margin: 0 0 20px; font-size: 13px; color: var(--ink-2); white-space: nowrap; overflow-x: auto; }
 .weights b { color: var(--ink); font-weight: 600; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }
+.month-block { padding: 14px; margin-bottom: 20px; border-radius: 18px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 16px; }
+.month-block.current { background: color-mix(in srgb, var(--accent) 7%, var(--page)); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.month-block.prior { background: color-mix(in srgb, var(--muted) 10%, var(--page)); border-style: dashed; }
+.month-block .target { margin-bottom: 0; }
+.month-tag { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; }
+.month-block.current .month-tag { background: var(--accent); color: var(--surface); }
+.month-block.prior .month-tag { background: transparent; color: var(--ink-2); border: 1px solid var(--axis); }
 .charts { display: flex; flex-direction: column; gap: 16px; margin-bottom: 16px; }
 .chart-row { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: stretch; }
 .trend { margin: 0; padding: 18px 20px 14px; min-width: 0; }
