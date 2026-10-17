@@ -269,6 +269,7 @@ def total_color(total):
 
 
 MONTHLY_TARGET = 200
+DAILY_CAP = MONTHLY_TARGET / 30
 
 
 def target_message(actual, low, high, target):
@@ -501,6 +502,8 @@ h1 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 4px
 .daily h2 { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
 .daily svg { display: block; width: 100%; height: auto; }
 .bar { fill: var(--series-1); }
+.bar.over { fill: #dc2626; }
+.cap-line { stroke: #dc2626; stroke-width: 1; stroke-dasharray: 4 3; }
 .hit { fill: transparent; }
 .hit:hover + .bar, .bar:hover { opacity: 0.8; }
 .table-card { padding: 4px 8px 8px; }
@@ -646,7 +649,7 @@ document.querySelectorAll(".plot").forEach(function (plot) {
 def render_daily_bars(days, totals):
     """Bar chart of each day's total spend; the tallest bar carries its value, the rest show it on hover."""
     left, top, bar_w, gap, chart_h = 44, 20, 16, 6, 180
-    step, peak = nice_axis(max(totals + [0.01]))
+    step, peak = nice_axis(max(totals + [DAILY_CAP]))
     y_at = lambda cost: top + chart_h - cost / peak * chart_h
     width = left + len(days) * (bar_w + gap) + 8
     parts = []
@@ -667,10 +670,18 @@ def render_daily_bars(days, totals):
         parts.append(
             f'<rect class="hit" x="{x - gap / 2:.1f}" y="{top}" width="{bar_w + gap}" height="{chart_h}"><title>{d}: ${total:.2f}</title></rect>'
         )
-        if h >= 0.5:
-            parts.append(f'<path class="bar" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h)}"><title>{d}: ${total:.2f}</title></path>')
+        title = f"<title>{d}: ${total:.2f}" + (f" (${total - DAILY_CAP:.2f} over the ${DAILY_CAP:.2f} daily cap)" if total > DAILY_CAP else "") + "</title>"
+        if total > DAILY_CAP:
+            base_h = DAILY_CAP / peak * chart_h
+            parts.append(f'<path class="bar" d="{rounded_top_bar(x, top + chart_h - base_h, bar_w, base_h, radius=0)}">{title}</path>')
+            parts.append(f'<path class="bar over" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h - base_h)}">{title}</path>')
+        elif h >= 0.5:
+            parts.append(f'<path class="bar" d="{rounded_top_bar(x, top + chart_h - h, bar_w, h)}">{title}</path>')
         if i == tallest and total > 0:
             parts.append(f'<text class="tick" x="{x + bar_w / 2:.1f}" y="{top + chart_h - h - 6:.1f}" text-anchor="middle" style="fill:var(--ink)">${total:.0f}</text>')
+    parts.append(
+        f'<line class="cap-line" x1="{left}" x2="{width - 8}" y1="{y_at(DAILY_CAP):.1f}" y2="{y_at(DAILY_CAP):.1f}"><title>Daily cap: ${DAILY_CAP:.2f} (${MONTHLY_TARGET} / 30)</title></line>'
+    )
     return f'<svg viewBox="0 0 {width} {top + chart_h + 40}" role="img" aria-label="Daily spend">{"".join(parts)}</svg>'
 
 

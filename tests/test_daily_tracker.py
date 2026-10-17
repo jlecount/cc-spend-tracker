@@ -423,3 +423,21 @@ class MonthTotalTest(unittest.TestCase):
         self.assertIn(">$735 &rarr; $2298<", page)
         self.assertIn(f"color:{st.TOTAL_COLORS['yellow']}", page)
         self.assertIn(f"color:{st.TOTAL_COLORS['red']}", page)
+
+
+class DailyCapBarsTest(unittest.TestCase):
+    days = [date(2026, 10, 1), date(2026, 10, 2)]
+
+    def test_daily_cap_is_monthly_target_over_30(self):
+        self.assertAlmostEqual(st.DAILY_CAP, 200 / 30)
+
+    def test_day_under_cap_has_no_over_segment(self):
+        svg = st.render_daily_bars(self.days, [5.0, 5.0])
+        self.assertNotIn('class="bar over"', svg)
+
+    def test_day_over_cap_has_one_over_segment_per_day(self):
+        svg = st.render_daily_bars(self.days, [5.0, 20.0])
+        self.assertEqual(svg.count('class="bar over"'), 1)
+
+    def test_cap_line_is_drawn(self):
+        self.assertIn('class="cap-line"', st.render_daily_bars(self.days, [5.0, 20.0]))
