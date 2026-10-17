@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,6 +36,37 @@ class RenderReportTest(unittest.TestCase):
         self.assertIn("<td>$5.50</td>", page)
         for sid in sessions:
             self.assertIn(sid, page)
+
+
+class MonthFilterTest(unittest.TestCase):
+    def setUp(self):
+        self.state = {"days": {
+            "2026-09-30": {"total": 10.0, "sessions": {"sa": 10.0}},
+            "2026-10-01": {"total": 5.0, "sessions": {"sb": 3.0, "sc": 2.0}},
+            "2026-10-02": {"total": 7.0, "sessions": {}},
+        }}
+        self.page = st.render_report(self.state, date(2026, 9, 30), date(2026, 10, 2))
+
+    def test_day_and_detail_rows_carry_their_month(self):
+        self.assertIn('<tr data-month="2026-09"><td>2026-09-30</td>', self.page)
+        self.assertIn('<tr data-month="2026-10"><td>2026-10-02</td>', self.page)
+        self.assertIn('<tr class="detail" data-month="2026-10" id="detail-2026-10-01" hidden>', self.page)
+
+    def test_pills_are_newest_first_with_totals_and_newest_selected(self):
+        pills = re.findall(r'<button class="pill"[^>]*>.*?</button>', self.page)
+        self.assertEqual(len(pills), 3)
+        self.assertIn('data-month="2026-10"', pills[0])
+        self.assertIn('aria-pressed="true"', pills[0])
+        self.assertIn("Oct 2026", pills[0])
+        self.assertIn("$12", pills[0])
+        self.assertIn('data-month="2026-09"', pills[1])
+        self.assertIn('aria-pressed="false"', pills[1])
+        self.assertIn('data-month="all"', pills[2])
+        self.assertIn("All", pills[2])
+
+    def test_expand_all_button_and_selection_summary_exist(self):
+        self.assertIn('id="expand-all"', self.page)
+        self.assertIn('id="month-summary"', self.page)
 
 
 class ModelNameTest(unittest.TestCase):
