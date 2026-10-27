@@ -8,6 +8,10 @@ Requires macOS and Node.js.
 - View report: `open report_daily.html`
 - Uninstall: `launchctl bootout gui/$(id -u)/com.$(id -un).claude-spend-tracker`
 
+## Accounts
+
+The "Account" dropdown at the top of the report is All by default, or one account's email. Each session's account is the email in its log under `~/.claude/projects`; sessions whose log is gone or has no email are listed as `unknown`. Per-account day totals are the sum of that account's session costs, so they can differ slightly from the All total (which comes from ccusage). The hourly report is not split by account.
+
 ## Spend projections
 
 The current-month chart projects month-end spend from how much you work on each weekday. `.weights.json` sets that share per day, as a number from 0 (no work) to 1 (full day):

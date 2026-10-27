@@ -68,12 +68,13 @@ class MonthFilterTest(unittest.TestCase):
         self.assertIn('<tr data-month="2026-09"><td>2026-09-30</td>', self.page)
         self.assertIn('<tr data-month="2026-10"><td>2026-10-02</td>', self.page)
         self.assertIn(
-            '<tr class="detail" data-month="2026-10" id="detail-2026-10-01" hidden>',
+            '<tr class="detail" data-month="2026-10" id="detail-all-2026-10-01" hidden>',
             self.page,
         )
 
     def test_pills_are_newest_first_with_totals_and_newest_selected(self):
-        pills = re.findall(r'<button class="pill"[^>]*>.*?</button>', self.page)
+        all_view = self.page.split('data-view="account-1"')[0]
+        pills = re.findall(r'<button class="pill"[^>]*>.*?</button>', all_view)
         self.assertEqual(len(pills), 3)
         self.assertIn('data-month="2026-10"', pills[0])
         self.assertIn('aria-pressed="true"', pills[0])
@@ -85,8 +86,8 @@ class MonthFilterTest(unittest.TestCase):
         self.assertIn("All", pills[2])
 
     def test_expand_all_button_and_selection_summary_exist(self):
-        self.assertIn('id="expand-all"', self.page)
-        self.assertIn('id="month-summary"', self.page)
+        self.assertIn('id="expand-all-all"', self.page)
+        self.assertIn('id="month-summary-all"', self.page)
 
 
 class ModelNameTest(unittest.TestCase):
@@ -713,3 +714,89 @@ class DailyCapBarsTest(unittest.TestCase):
         self.assertIn(">$20<", svg)
         self.assertNotIn('fill:var(--ink)">$0<', svg)
         self.assertIn("&lt;$1", st.render_daily_bars(self.days, [0.3, 5.0]))
+
+
+def session_context(email_text):
+    return {
+        "type": "attachment",
+        "attachment": {"type": "session_context", "context": {"userEmail": email_text}},
+    }
+
+
+class SessionAccountTest(unittest.TestCase):
+    def read(self, entries):
+        path = Path(tempfile.mkdtemp()) / "abc.jsonl"
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        return st.read_session_info(path)
+
+    def test_account_is_the_email_in_the_session_context(self):
+        info = self.read(
+            [session_context("The user's email address is a.b@example.com. Use it only to identify.")]
+        )
+        self.assertEqual(info["account"], "a.b@example.com")
+
+    def test_first_email_wins(self):
+        info = self.read(
+            [
+                session_context("The user's email address is first@example.com. x"),
+                session_context("The user's email address is second@example.com. x"),
+            ]
+        )
+        self.assertEqual(info["account"], "first@example.com")
+
+    def test_session_without_email_is_unknown(self):
+        self.assertEqual(self.read([{"type": "ai-title", "aiTitle": "t"}])["account"], "unknown")
+
+
+class AccountScopeTest(unittest.TestCase):
+    state = {
+        "days": {
+            "2026-09-10": {"total": 30.0, "sessions": {"s1": 10.0, "s2": 15.0, "s3": 4.0}},
+            "2026-10-01": {"total": 6.0, "sessions": {"s2": 5.0}},
+            "2026-10-02": {"total": 4.0, "sessions": {}},
+        },
+        "session_info": {
+            "s1": {"account": "a@example.com"},
+            "s2": {"account": "b@example.com"},
+            "s3": {"account": "unknown"},
+        },
+    }
+
+    def test_accounts_are_sorted_with_unknown_last(self):
+        self.assertEqual(
+            st.session_accounts(self.state), ["a@example.com", "b@example.com", "unknown"]
+        )
+
+    def test_session_missing_from_session_info_counts_as_unknown(self):
+        state = {"days": {"2026-09-10": {"total": 1.0, "sessions": {"zz": 1.0}}}}
+        self.assertEqual(st.session_accounts(state), ["unknown"])
+
+    def test_scoping_keeps_only_that_accounts_sessions_and_sums_their_cost(self):
+        scoped = st.scope_to_account(self.state, "b@example.com")
+        self.assertEqual(scoped["days"]["2026-09-10"], {"total": 15.0, "sessions": {"s2": 15.0}})
+        self.assertEqual(scoped["days"]["2026-10-01"]["total"], 5.0)
+
+    def test_scoping_keeps_every_day_even_with_no_spend(self):
+        scoped = st.scope_to_account(self.state, "a@example.com")
+        self.assertEqual(scoped["days"]["2026-10-02"], {"total": 0.0, "sessions": {}})
+
+    def test_report_has_dropdown_defaulting_to_all_and_one_view_per_account(self):
+        page = st.render_report(self.state, date(2026, 9, 10), date(2026, 10, 2))
+        select = re.search(r'<select id="account-select".*?</select>', page, re.S).group(0)
+        options = re.findall(r"<option([^>]*)>([^<]*)</option>", select)
+        self.assertEqual(
+            [label for _, label in options],
+            ["All", "a@example.com", "b@example.com", "unknown"],
+        )
+        self.assertIn("selected", options[0][0])
+        self.assertEqual(page.count('class="account-view"'), 4)
+
+    def test_account_view_shows_only_that_accounts_total(self):
+        page = st.render_report(self.state, date(2026, 9, 10), date(2026, 10, 2))
+        view = re.search(
+            r'<div class="account-view" data-view="account-2".*?(?=<div class="account-view"|<script>)',
+            page,
+            re.S,
+        ).group(0)
+        self.assertIn("<td>$15.00</td>", view)
+        self.assertNotIn("$30.00", view)

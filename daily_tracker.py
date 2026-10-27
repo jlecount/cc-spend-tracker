@@ -26,6 +26,9 @@ WEIGHTS_PATH = HERE / ".weights.json"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 # Placeholder model name Claude Code writes on locally generated messages.
 SYNTHETIC_MODEL = "<synthetic>"
+# Account label for sessions whose log records no email.
+UNKNOWN_ACCOUNT = "unknown"
+ACCOUNT_EMAIL_PATTERN = re.compile(r"email address is (\S+?)\.?(?:\s|$)")
 
 # Anthropic's prompt-cache TTL: a gap this long since the session's last request
 # evicts the cache (a "cache miss"). Not exposed in Claude Code's settings files
@@ -84,8 +87,9 @@ def activity_stats(timestamps, ttl_seconds=CACHE_TTL_SECONDS):
 
 
 def read_session_info(log_path):
-    """Title Claude Code recorded for the session (last ai-title), else the first typed prompt."""
-    title, first_prompt, project, timestamps = None, None, None, []
+    """Title Claude Code recorded for the session (last ai-title), else the first typed prompt.
+    The account is the first email in the log's session_context attachment."""
+    title, first_prompt, project, account, timestamps = None, None, None, None, []
     model_counts = Counter()
     for line in Path(log_path).read_text().splitlines():
         try:
@@ -99,6 +103,10 @@ def read_session_info(log_path):
             model = entry.get("message", {}).get("model")
             if model and model != SYNTHETIC_MODEL:
                 model_counts[model] += 1
+        if account is None and entry.get("type") == "attachment":
+            context = entry.get("attachment", {}).get("context", {})
+            match = ACCOUNT_EMAIL_PATTERN.search(context.get("userEmail", ""))
+            account = match.group(1) if match else None
         if entry.get("type") == "ai-title":
             title = entry["aiTitle"]
         elif entry.get("type") == "user":
@@ -110,6 +118,7 @@ def read_session_info(log_path):
     return {
         "title": title or first_prompt or "",
         "project": project or "",
+        "account": account or UNKNOWN_ACCOUNT,
         "models": [model for model, _ in model_counts.most_common()],
         "started": timestamps[0] if timestamps else None,
         "ended": timestamps[-1] if timestamps else None,
@@ -156,6 +165,34 @@ def update_session_info(state, session_ids, projects_dir=PROJECTS_DIR):
     for session_id in session_ids:
         if session_id in logs:
             info[session_id] = read_session_info(logs[session_id])
+
+
+def session_account(state, session_id):
+    return state.get("session_info", {}).get(session_id, {}).get("account") or UNKNOWN_ACCOUNT
+
+
+def session_accounts(state):
+    """Accounts with at least one session, sorted by email with the unknown account last."""
+    found = {
+        session_account(state, sid)
+        for day in state["days"].values()
+        for sid in day["sessions"]
+    }
+    return sorted(found - {UNKNOWN_ACCOUNT}) + ([UNKNOWN_ACCOUNT] if UNKNOWN_ACCOUNT in found else [])
+
+
+def scope_to_account(state, account):
+    """Copy of state where each day holds only that account's sessions, and the day total is their sum.
+    ccusage daily totals have no account, so this can differ slightly from the All total."""
+    days = {}
+    for day, record in state["days"].items():
+        sessions = {
+            sid: cost
+            for sid, cost in record["sessions"].items()
+            if session_account(state, sid) == account
+        }
+        days[day] = {"total": sum(sessions.values()), "sessions": sessions}
+    return {**state, "days": days}
 
 
 def collection_start(state, today):
@@ -483,7 +520,7 @@ def month_block(kind, tag, content):
     return f'<section class="month-block {kind}"><div class="month-head"><span class="month-tag">{tag}</span></div>{content}</section>'
 
 
-def render_trend_charts(state, today, weights):
+def render_trend_charts(state, today, weights, view_id="all"):
     """Raises ValueError when last month has no records, since its chart would be meaningless."""
     weights_line = render_weekly_weights(weights)
     this_first = today.replace(day=1)
@@ -506,7 +543,7 @@ def render_trend_charts(state, today, weights):
             )
         ],
         last_last.day,
-        "last-month",
+        f"{view_id}-last-month",
         date_prefix=f"{last_first:%b}",
     )
     prior_block = month_block(
@@ -543,7 +580,7 @@ def render_trend_charts(state, today, weights):
             ),
         ],
         days_in_month,
-        "this-month",
+        f"{view_id}-this-month",
         marker=(today.day, f"{today:%m/%d}"),
         date_prefix=f"{today:%b}",
     )
@@ -581,6 +618,10 @@ body { font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 
   background: var(--page); color: var(--ink); }
 main { max-width: 1320px; margin: 0 auto; }
 h1 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 4px; }
+.page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.account-picker { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
+.account-picker select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; }
+.account-view[hidden] { display: none; }
 .summary { padding: 16px 20px 14px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 14px; }
 .summary-panel[hidden] { display: none; }
 .stats { display: flex; flex-wrap: wrap; gap: 12px 40px; }
@@ -677,60 +718,66 @@ tr:not(.detail):hover td { background: color-mix(in srgb, var(--muted) 8%, trans
 """
 
 REPORT_JS = """
-document.querySelectorAll(".toggle").forEach(function (button) {
-  button.addEventListener("click", function () {
-    var row = document.getElementById("detail-" + button.dataset.day);
-    row.hidden = !row.hidden;
-    button.setAttribute("aria-expanded", String(!row.hidden));
-  });
-});
-var selectedMonth = null;
-function visibleDayRows() {
-  return Array.prototype.filter.call(document.querySelectorAll("tr[data-month]:not(.detail)"),
-    function (row) { return !row.classList.contains("filtered-out"); });
-}
-function syncExpandAll() {
-  var toggles = visibleDayRows().map(function (row) { return row.querySelector(".toggle"); }).filter(Boolean);
-  var allOpen = toggles.length > 0 && toggles.every(function (t) { return t.getAttribute("aria-expanded") === "true"; });
-  document.getElementById("expand-all").textContent = allOpen ? "Collapse all" : "Expand all";
-  return { toggles: toggles, allOpen: allOpen };
-}
-function selectMonth(month) {
-  selectedMonth = month;
-  document.querySelectorAll(".pill").forEach(function (pill) {
-    pill.setAttribute("aria-pressed", String(pill.dataset.month === month));
-  });
-  document.querySelectorAll("tr[data-month]").forEach(function (row) {
-    row.classList.toggle("filtered-out", month !== "all" && row.dataset.month !== month);
-  });
-  var rows = visibleDayRows(), total = 0, sessions = 0;
-  rows.forEach(function (row) {
-    total += parseFloat(row.cells[1].textContent.replace("$", ""));
-    sessions += parseInt(row.cells[2].textContent, 10);
-  });
-  document.getElementById("month-summary").textContent = rows.length + " days \u00b7 " + sessions + " sessions \u00b7 $" +
-    total.toFixed(2) + " total \u00b7 $" + (rows.length ? total / rows.length : 0).toFixed(2) + " per day";
-  syncExpandAll();
-}
-document.querySelectorAll(".pill").forEach(function (pill) {
-  pill.addEventListener("click", function () { selectMonth(pill.dataset.month); });
-});
-document.getElementById("expand-all").addEventListener("click", function () {
-  var state = syncExpandAll();
-  state.toggles.forEach(function (t) {
-    if ((t.getAttribute("aria-expanded") === "true") === state.allOpen) t.click();
-  });
-});
-document.querySelectorAll(".toggle").forEach(function (t) { t.addEventListener("click", syncExpandAll); });
-selectMonth(document.querySelector(".pill").dataset.month);
-document.querySelectorAll(".scope-pill").forEach(function (pill) {
-  pill.addEventListener("click", function () {
-    document.querySelectorAll(".scope-pill").forEach(function (other) {
-      other.setAttribute("aria-pressed", String(other === pill));
+document.querySelectorAll(".account-view").forEach(function (view) {
+  var expandAll = view.querySelector(".toggle-all"), monthSummary = view.querySelector(".month-summary");
+  view.querySelectorAll(".toggle").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var row = document.getElementById(button.dataset.detail);
+      row.hidden = !row.hidden;
+      button.setAttribute("aria-expanded", String(!row.hidden));
     });
-    document.querySelectorAll(".summary-panel").forEach(function (panel) {
-      panel.hidden = panel.dataset.scope !== pill.dataset.scope;
+  });
+  function visibleDayRows() {
+    return Array.prototype.filter.call(view.querySelectorAll("tr[data-month]:not(.detail)"),
+      function (row) { return !row.classList.contains("filtered-out"); });
+  }
+  function syncExpandAll() {
+    var toggles = visibleDayRows().map(function (row) { return row.querySelector(".toggle"); }).filter(Boolean);
+    var allOpen = toggles.length > 0 && toggles.every(function (t) { return t.getAttribute("aria-expanded") === "true"; });
+    expandAll.textContent = allOpen ? "Collapse all" : "Expand all";
+    return { toggles: toggles, allOpen: allOpen };
+  }
+  function selectMonth(month) {
+    view.querySelectorAll(".pill").forEach(function (pill) {
+      pill.setAttribute("aria-pressed", String(pill.dataset.month === month));
     });
+    view.querySelectorAll("tr[data-month]").forEach(function (row) {
+      row.classList.toggle("filtered-out", month !== "all" && row.dataset.month !== month);
+    });
+    var rows = visibleDayRows(), total = 0, sessions = 0;
+    rows.forEach(function (row) {
+      total += parseFloat(row.cells[1].textContent.replace("$", ""));
+      sessions += parseInt(row.cells[2].textContent, 10);
+    });
+    monthSummary.textContent = rows.length + " days \u00b7 " + sessions + " sessions \u00b7 $" +
+      total.toFixed(2) + " total \u00b7 $" + (rows.length ? total / rows.length : 0).toFixed(2) + " per day";
+    syncExpandAll();
+  }
+  view.querySelectorAll(".pill").forEach(function (pill) {
+    pill.addEventListener("click", function () { selectMonth(pill.dataset.month); });
+  });
+  expandAll.addEventListener("click", function () {
+    var state = syncExpandAll();
+    state.toggles.forEach(function (t) {
+      if ((t.getAttribute("aria-expanded") === "true") === state.allOpen) t.click();
+    });
+  });
+  view.querySelectorAll(".toggle").forEach(function (t) { t.addEventListener("click", syncExpandAll); });
+  selectMonth(view.querySelector(".pill").dataset.month);
+  view.querySelectorAll(".scope-pill").forEach(function (pill) {
+    pill.addEventListener("click", function () {
+      view.querySelectorAll(".scope-pill").forEach(function (other) {
+        other.setAttribute("aria-pressed", String(other === pill));
+      });
+      view.querySelectorAll(".summary-panel").forEach(function (panel) {
+        panel.hidden = panel.dataset.scope !== pill.dataset.scope;
+      });
+    });
+  });
+});
+document.getElementById("account-select").addEventListener("change", function (event) {
+  document.querySelectorAll(".account-view").forEach(function (view) {
+    view.hidden = view.dataset.view !== event.target.value;
   });
 });
 var SVG_NS = "http://www.w3.org/2000/svg";
@@ -845,7 +892,7 @@ def render_daily_bars(days, totals):
     return f'<svg viewBox="0 0 {width} {top + chart_h + 40}" role="img" aria-label="Daily spend">{"".join(parts)}</svg>'
 
 
-def render_month_filter(days, totals):
+def render_month_filter(days, totals, view_id):
     """Pills that limit the day table to one month, newest first; the newest month starts selected."""
     month_totals = {}
     for d, total in zip(days, totals):
@@ -862,8 +909,8 @@ def render_month_filter(days, totals):
     return (
         '<div class="filter-bar"><div class="pills" role="group" aria-label="Filter days by month">'
         + "".join(pills)
-        + '</div><button class="toggle-all" id="expand-all" type="button">Expand all</button></div>'
-        '<p class="month-summary" id="month-summary"></p>'
+        + f'</div><button class="toggle-all" id="expand-all-{view_id}" type="button">Expand all</button></div>'
+        f'<p class="month-summary" id="month-summary-{view_id}"></p>'
     )
 
 
@@ -911,7 +958,7 @@ def render_summary(days, totals, today):
     )
 
 
-def render_report(state, start, end, today=None, weights=None):
+def render_account_view(state, start, end, today, weights, view_id):
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     totals = [state["days"].get(str(d), {}).get("total", 0.0) for d in days]
     rows = []
@@ -922,7 +969,7 @@ def render_report(state, start, end, today=None, weights=None):
         )
         average = f"${total / len(sessions):.2f}" if sessions else "-"
         toggle = (
-            f'<button class="toggle" aria-expanded="false" data-day="{d}">Sessions</button>'
+            f'<button class="toggle" aria-expanded="false" data-detail="detail-{view_id}-{d}">Sessions</button>'
             if sessions
             else ""
         )
@@ -943,22 +990,41 @@ def render_report(state, start, end, today=None, weights=None):
                 for sid, cost in sessions
             )
             rows.append(
-                f'<tr class="detail" data-month="{month}" id="detail-{d}" hidden><td colspan="5"><div class="panel">{items}</div></td></tr>'
+                f'<tr class="detail" data-month="{month}" id="detail-{view_id}-{d}" hidden><td colspan="5"><div class="panel">{items}</div></td></tr>'
             )
 
     if today and weights is None:
         raise ValueError("weights are required to render trend charts")
-    trend_charts = render_trend_charts(state, today, weights) if today else ""
+    trend_charts = render_trend_charts(state, today, weights, view_id) if today else ""
     summary = render_summary(days, totals, today)
-    month_filter = render_month_filter(days, totals)
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Claude Code Spend</title>
-<style>{REPORT_CSS}</style></head><body><main>
-<h1>Claude Code spend</h1>
-{summary}
+    month_filter = render_month_filter(days, totals, view_id)
+    return f"""{summary}
 <div class="charts">{trend_charts}</div>
 <section class="daily card"><h2>Daily spend</h2>{render_daily_bars(days, totals)}</section>
 {month_filter}
-<div class="table-card card"><table><tr><th>Day</th><th>Total</th><th>Sessions</th><th>Avg $/session</th><th></th></tr>{"".join(rows)}</table></div>
+<div class="table-card card"><table><tr><th>Day</th><th>Total</th><th>Sessions</th><th>Avg $/session</th><th></th></tr>{"".join(rows)}</table></div>"""
+
+
+def render_report(state, start, end, today=None, weights=None):
+    """One page holding a view for All and one per account; the dropdown shows one at a time."""
+    views = [("all", "All", state)] + [
+        (f"account-{i}", account, scope_to_account(state, account))
+        for i, account in enumerate(session_accounts(state), start=1)
+    ]
+    options = "".join(
+        f'<option value="{view_id}"{" selected" if view_id == "all" else ""}>{html.escape(label)}</option>'
+        for view_id, label, _ in views
+    )
+    rendered = "".join(
+        f'<div class="account-view" data-view="{view_id}"{"" if view_id == "all" else " hidden"}>'
+        f"{render_account_view(view_state, start, end, today, weights, view_id)}</div>"
+        for view_id, _, view_state in views
+    )
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Claude Code Spend</title>
+<style>{REPORT_CSS}</style></head><body><main>
+<div class="page-head"><h1>Claude Code spend</h1>
+<label class="account-picker">Account <select id="account-select">{options}</select></label></div>
+{rendered}
 <script>{REPORT_JS}</script>
 </main></body></html>"""
 
